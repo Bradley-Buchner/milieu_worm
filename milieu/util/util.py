@@ -415,3 +415,20 @@ def ensure_dir_exists(dir):
             ensure_dir_exists(parent_dir)
         os.mkdir(dir)
 
+
+def set_seed(seed):
+    """Sets the seed for Python, NumPy, and PyTorch.
+    """
+    import random
+
+    random.seed(seed) # Python
+
+    np.random.seed(seed) # NumPy
+
+    torch.manual_seed(seed) # PyTorch CPU & CUDA
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    # Force CuDNN determinism
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
