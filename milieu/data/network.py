@@ -19,7 +19,7 @@ class Network:
 
     def __init__(self, network_path, remove_edges=0, remove_nodes=0):
         """
-        Load a protein-proetin interaction network from an adjacency list.
+        Load a protein-protein interaction network from an adjacency list.
         args:
             network_path (string)
             remove_edges (double) fraction between 0 and 1 inclusive indicating 
@@ -30,14 +30,17 @@ class Network:
         # map protein entrez ids to node index
         node_names = set()
         edges = []
+        weighted_edges = []
         with open(network_path) as network_file:
             for line in network_file:
                 if remove_edges > 0 and random.random() < remove_edges:
                     continue
-                p1, p2 = [int(a) for a in line.split()] 
-                node_names.add(p1)
-                node_names.add(p2)
+                p1_s, p2_s, w_s = line.split()
+                p1, p2 = map(int, (p1_s, p2_s))
+                w = float(w_s)
+                node_names.update((p1, p2))
                 edges.append((p1, p2))
+                weighted_edges.append((p1, p2, w))
         if remove_nodes > 0: 
             assert(remove_nodes < 1)
             node_names = random.sample(node_names, 1 - remove_nodes)
@@ -48,12 +51,21 @@ class Network:
         # build adjacency matrix
         self.adj_matrix = np.zeros((len(self.name_to_node), 
                                     len(self.name_to_node)))
+
+        self.weighted_adj_matrix = np.zeros((len(self.name_to_node),
+                                    len(self.name_to_node)))
+
         for p1, p2 in edges:
             n1, n2 = self.name_to_node[p1], self.name_to_node[p2]
             self.adj_matrix[n1, n2] = 1
             self.adj_matrix[n2, n1] = 1
+
+        for p1, p2, w in weighted_edges:
+            n1, n2 = self.name_to_node[p1], self.name_to_node[p2]
+            self.weighted_adj_matrix[n1, n2] = w
+            self.weighted_adj_matrix[n2, n1] = w
         
-        self.nx = nx.from_numpy_matrix(self.adj_matrix)
+        self.nx = nx.from_numpy_array(self.adj_matrix)
     
     def __len__(self):
         """
