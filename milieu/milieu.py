@@ -446,7 +446,7 @@ class MilieuWorm(Milieu):
 
         "batch_size": 1,
         "num_workers": 0,
-        "epochs": 200,
+        "num_epochs": 200,
         "early_stopping_patience": 500,
 
         "optim_class": "Adam",
@@ -466,32 +466,17 @@ class MilieuWorm(Milieu):
 
     def __init__(self, network, params, use_weighted_adj=False):
         """
-        Milieu model as described in {TODO}.
+        Milieu model as described in "Mutual Interactors as a principle for the
+        discovery of phenotypes in molecular networks" adapted for C. elegans
+        aging study.
         args:
             network (Network) The Network to use.
             params   (dict) Params to update in default_params.
             use_weighted_adj (Boolean) Use weighted adjacency matrix to build model
         """
-        super().__init__()
-
-        set_logger()
-        logging.info("Milieu")
-
-        # override default parameters
-        logging.info("Setting parameters...")
-        self.params = deepcopy(self.default_params)
-        self.params.update(params)
-
         self.use_weighted_adj = use_weighted_adj
-        self.network = network
-        self.adj_matrix = network.adj_matrix
         self.weighted_adj_matrix = network.weighted_adj_matrix
-
-        logging.info("Building model...")
-        self._build_model()
-        logging.info("Building optimizer...")
-        self._build_optimizer()
-        logging.info("Done.")
+        super().__init__(network, params)
 
     def _build_model(self):
         """
@@ -539,7 +524,7 @@ class MilieuWorm(Milieu):
                                             dtype=torch.float,
                                             requires_grad=True))
 
-    def loss(self, outputs, targets, targets_weights_mask):
+    def loss(self, outputs, targets, targets_weight_mask):
         """
         Compute weighted, binary cross-entropy loss as described in Methods, Equation (3).
         Positive examples are weighted {# of negative examples} / {# of positive examples}
@@ -554,7 +539,7 @@ class MilieuWorm(Milieu):
             whether node j is in the held-out set of nodes associated with node set
             i.
 
-            targets_weights_mask (torch.Tensor) An (m, n) float tensor. Element (i, j)
+            targets_weight_mask (torch.Tensor) An (m, n) float tensor. Element (i, j)
             indicates the weight of node j in node set i, reflecting the confidence
             of its phenotypic association. The mask nudges the model to be better at
             recovering high-confidence positives by up-weighting their influence in
@@ -563,9 +548,7 @@ class MilieuWorm(Milieu):
         returns:
             out (torch.Tensor) A scalar loss.
         """
-        num_pos = 1.0 * targets.data.sum()
-        num_neg = targets.data.nelement() - num_pos
-        bce_loss = nn.BCEWithLogitsLoss(pos_weight=num_neg / num_pos, weight=targets_weights_mask)
+        bce_loss = nn.BCEWithLogitsLoss(weight=targets_weight_mask)
         return bce_loss(outputs, targets)
 
     def train_model(self, train_dataset, valid_dataset=None):
@@ -672,11 +655,11 @@ class MilieuWorm(Milieu):
 
         avg_loss = 0
 
-        for i, (inputs, targets, targets_weights_mask) in enumerate(dataloader):
+        for i, (inputs, targets, targets_weight_mask) in enumerate(dataloader):
             if self.params["cuda"]:
                 inputs = inputs.to(self.params["device"])
                 targets = targets.to(self.params["device"])
-                targets_weights_mask = targets_weights_mask.to(self.params["device"])
+                targets_weight_mask = targets_weight_mask.to(self.params["device"])
 
             # forward pass
             outputs = self.forward(inputs)
@@ -685,7 +668,7 @@ class MilieuWorm(Milieu):
             if verbose:
                 num_pos = 1.0 * targets.data.sum()
                 print(f"[train loss] positive examples = {num_pos}")
-            loss = self.loss(outputs, targets, targets_weights_mask)
+            loss = self.loss(outputs, targets, targets_weight_mask)
 
             # backward pass
             self.optimizer.zero_grad()
@@ -703,7 +686,7 @@ class MilieuWorm(Milieu):
             # compute average loss and update progress bar
             avg_loss = ((avg_loss * i) + loss) / (i + 1)
 
-            del loss, outputs, inputs, targets, targets_weights_mask
+            del loss, outputs, inputs, targets, targets_weight_mask
 
         metrics = {name: np.mean(values) for name, values in metrics.items()}
         return metrics, avg_loss
@@ -732,19 +715,19 @@ class MilieuWorm(Milieu):
 
         # with tqdm(total=len(dataloader)) as t, torch.no_grad():
         with torch.no_grad():
-            for i, (inputs, targets, targets_weights_mask) in enumerate(dataloader):
+            for i, (inputs, targets, targets_weight_mask) in enumerate(dataloader):
                 # move to GPU if available
                 if self.params["cuda"]:
                     inputs = inputs.to(self.params["device"])
                     targets = targets.to(self.params["device"])
-                    targets_weights_mask = targets_weights_mask.to(self.params["device"])
+                    targets_weight_mask = targets_weight_mask.to(self.params["device"])
 
                 # forward pass
                 outputs = self.forward(inputs)
                 if verbose:
                     num_pos = 1.0 * targets.data.sum()
                     print(f"[val loss] positive examples = {num_pos}")
-                loss = self.loss(outputs, targets, targets_weights_mask)  # Calculate loss for validation as well
+                loss = self.loss(outputs, targets, targets_weight_mask)  # Calculate loss for validation as well
                 loss = loss.cpu().detach().numpy()
                 probs = self.predict(inputs)
                 compute_metrics(probs.cpu().detach().numpy(),
@@ -770,7 +753,8 @@ class NodeSetWorm:
 
 class MilieuDatasetWorm(Dataset):
 
-    def __init__(self, network, node_mapping, phenotype_confidence_dict=None, node_sets=None, frac_known=0.9):
+    def __init__(self, network, node_mapping, phenotype_confidence_dict=None,
+                 node_sets=None, frac_known=0.9):
         """
         PyTorch dataset that holds node sets and serves them to the 
         Milieu for training. During training we simulate node set expansion by 
@@ -824,22 +808,28 @@ class MilieuDatasetWorm(Dataset):
 
         inputs = torch.zeros(self.n, dtype=torch.float)
         targets = torch.zeros(self.n, dtype=torch.float)
-        target_weight_mask = torch.zeros(self.n, dtype=torch.float)
+        targets_weight_mask = torch.ones(self.n, dtype=torch.float)
+
+        inputs[known_nodes] = 1
+        targets[hidden_nodes] = 1
+
+        num_pos = 1.0 * targets.data.sum()
+        num_neg = targets.data.nelement() - num_pos
+        pos_imbalance = num_neg / num_pos
 
         if self.phenotype_confidence_dict is not None:
-            for node in known_nodes:
-                inputs[node] = self.phenotype_confidence_dict.get(self.node_mapping[str(node)], 0.0)
-            for node in hidden_nodes:
-                target_weight_mask[node] = self.phenotype_confidence_dict.get(self.node_mapping[str(node)], 0.0)
+            for u in known_nodes:
+                inputs[u] = self.phenotype_confidence_dict.get(self.node_mapping[str(u)], 0.0)
+            for u in hidden_nodes:
+                c = self.phenotype_confidence_dict.get(self.node_mapping[str(u)], 0.0)
+                targets_weight_mask[u] = 1 + (pos_imbalance - 1) * c
         else:
-            inputs[known_nodes] = 1
-            target_weight_mask[hidden_nodes] = 1
-
-        targets[hidden_nodes] = 1
+            for u in hidden_nodes:
+                targets_weight_mask[u] = pos_imbalance
 
         # ensure no data leakage
         assert(torch.dot(inputs, targets) == 0)
 
-        return inputs, targets, target_weight_mask
+        return inputs, targets, targets_weight_mask
 
 
