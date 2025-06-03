@@ -119,3 +119,4 @@ venv.bak/
 **.obo
 **.tar
 **.pkl
+data/networks/species_6239/wormbase/worm_network_basic_full_signed_all.json
