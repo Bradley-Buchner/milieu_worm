@@ -120,3 +120,7 @@ venv.bak/
 **.tar
 **.pkl
 data/networks/species_6239/wormbase/worm_network_basic_full_signed_all.json
+notebooks/milieu_worm_walkthrough copy.ipynb
+notebooks/milieu_worm_walkthrough_old.ipynb
+notebooks/mutual_interactors.ipynb
+notebooks/mutual_interactors_worm_lifespan.ipynb
