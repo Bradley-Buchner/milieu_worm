@@ -35,10 +35,12 @@ class Network:
             for line in network_file:
                 if remove_edges > 0 and random.random() < remove_edges:
                     continue
-                p1_s, p2_s, w_s = line.split()
-                p1, p2 = map(int, (p1_s, p2_s))
+                # p1_s, p2_s, w_s = line.split()
+                # p1, p2 = map(int, (p1_s, p2_s))
+                p1, p2, w_s = line.split()
                 w = float(w_s)
-                node_names.update((p1, p2))
+                node_names.add(p1)
+                node_names.add(p2)
                 edges.append((p1, p2))
                 weighted_edges.append((p1, p2, w))
         if remove_nodes > 0: 
