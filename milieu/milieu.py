@@ -1,13 +1,18 @@
 #!/usr/bin/env python
 """
 Implementation of Milieu model as described in "Mutual Interactors as a principle for the 
-discovery of phenotypers in molecular networks" by Sabri Eyuboglu, Marinka Zitnik, and
+discovery of phenotypes in molecular networks" by Sabri Eyuboglu, Marinka Zitnik, and
 Jure Leskovec. 
 
 Includes:
 
 Milieu  a torch.nn.Module that implements a trainable Milieu model.
-MilieuDataset   a torch.util.data.Dataset that serves NodeSet expansion examples 
+MilieuWorm  a torch.nn.Module that implements a trainable Milieu model
+    modified for the discovery of phenotypes in the roundworm C. elegans.
+MilieuDataset   a torch.util.data.Dataset that serves NodeSet expansion examples
+MilieuDatasetWorm   a torch.util.data.Dataset that serves NodeSet expansion examples
+    modified for the discovery of phenotypes in the roundworm C. elegans.
+
 """
 import os
 import json
@@ -44,7 +49,7 @@ class Milieu(nn.Module):
     is updated with the params passed to __init__.
     """
     default_params = {
-        "cuda": True,
+        "mps": True,
         "device": 0,
 
         "batch_size": 200,
@@ -190,7 +195,7 @@ class Milieu(nn.Module):
         inputs = torch.zeros((1, len(self.network)), dtype=torch.float)
         inputs[0, input_nodes] = 1
         
-        if self.params["cuda"]:
+        if self.params["mps"]:
             inputs = inputs.to(self.params["device"])
 
         probs = self.predict(inputs).cpu().detach().numpy().squeeze()
@@ -251,8 +256,8 @@ class Milieu(nn.Module):
             set_seed(self.params["seed"])
         logging.info(f'Starting training for {self.params["num_epochs"]} epoch(s)')
 
-        # move to cuda
-        if self.params["cuda"]:
+        # move to mps
+        if self.params["mps"]:
             self.to(self.params["device"])
 
         train_metrics = []
@@ -265,7 +270,8 @@ class Milieu(nn.Module):
                                       shuffle=True,
                                       generator = dl_generator,
                                       num_workers=self.params["num_workers"],
-                                      pin_memory=self.params["device"])
+                                      # pin_memory=self.params["device"]
+                                      )
         
         validate = valid_dataset is not None
         if validate:
@@ -275,7 +281,8 @@ class Milieu(nn.Module):
                                           shuffle=True,
                                           generator=dl_generator,
                                           num_workers=self.params["num_workers"],
-                                          pin_memory=self.params["device"])
+                                          # pin_memory=self.params["device"]
+                                          )
 
         all_train_metrics = []
         for epoch in range(self.params["num_epochs"]):
@@ -311,7 +318,7 @@ class Milieu(nn.Module):
 
         with tqdm(total=len(dataloader)) as t:
             for i, (inputs, targets) in enumerate(dataloader):
-                if self.params["cuda"]:
+                if self.params["mps"]:
                     inputs = inputs.to(self.params["device"])
                     targets = targets.to(self.params["device"])
 
@@ -359,8 +366,8 @@ class Milieu(nn.Module):
         logging.info("Validation")
         self.eval()
 
-        # move to cuda
-        if self.params["cuda"]:
+        # move to mps
+        if self.params["mps"]:
             self.to(self.params["device"])
 
         metrics = defaultdict(list)
@@ -369,7 +376,7 @@ class Milieu(nn.Module):
         with tqdm(total=len(dataloader)) as t, torch.no_grad():
             for i, (inputs, targets) in enumerate(dataloader):
                 # move to GPU if available
-                if self.params["cuda"]:
+                if self.params["mps"]:
                     inputs = inputs.to(self.params["device"])
                     targets = targets.to(self.params["device"])
 
@@ -418,7 +425,7 @@ class Milieu(nn.Module):
             substitution_res (list(tuple(str, str))) list of tuples like
                     (regex_pattern, replacement). re.sub is called on each key in the dict
         """
-        if self.params["cuda"]:
+        if self.params["mps"]:
             src_state_dict = torch.load(src_path, 
                                         map_location=torch.device(self.params["device"]))
         else:
@@ -441,13 +448,14 @@ class MilieuWorm(Milieu):
     is updated with the params passed to __init__.
     """
     default_params = {
-        "cuda": True,
+        "mps": True,
         "device": 0,
 
         "batch_size": 1,
         "num_workers": 0,
         "num_epochs": 200,
         "early_stopping_patience": 500,
+        "edge_dropout_alpha": 0.5,
 
         "optim_class": "Adam",
         "optim_args": {
@@ -464,7 +472,7 @@ class MilieuWorm(Milieu):
         ]
     }
 
-    def __init__(self, network, params, use_weighted_adj=False):
+    def __init__(self, network, params, use_weighted_adj=False, edge_dropout=False):
         """
         Milieu model as described in "Mutual Interactors as a principle for the
         discovery of phenotypes in molecular networks" adapted for C. elegans
@@ -473,10 +481,28 @@ class MilieuWorm(Milieu):
             network (Network) The Network to use.
             params   (dict) Params to update in default_params.
             use_weighted_adj (Boolean) Use weighted adjacency matrix to build model
+            edge_dropout (Boolean) Use edge dropout during model training
         """
         self.use_weighted_adj = use_weighted_adj
+
+        # # rescale W to have mean = 1
+        # W = network.weighted_adj_matrix.copy()
+        # mean_w = W[W > 0].mean()
+        # self.weighted_adj_matrix = W / mean_w
+
         self.weighted_adj_matrix = network.weighted_adj_matrix
+
+        self.edge_dropout = edge_dropout
+
+        self.alpha = params.get("edge_dropout_alpha", 1.0)
+
         super().__init__(network, params)
+
+        # assume network.edge_confidence_matrix is your matrix W_norm with values in [0,1]
+        self.register_buffer("edge_confidence_matrix", torch.tensor(self.weighted_adj_matrix, dtype=torch.float))
+        self.register_buffer('adj_matrix_tensor', torch.tensor(self.adj_matrix, dtype=torch.float))
+        self.register_buffer('identity', torch.eye(self.adj_matrix_tensor.size(0)))
+
 
     def _build_model(self):
         """
@@ -491,7 +517,7 @@ class MilieuWorm(Milieu):
         degree = np.maximum(degree, 1e-6)  # <-- no value below 1e-6
         inv_sqrt_degree = np.power(degree, -0.5)
         if np.any(np.isinf(inv_sqrt_degree)) or np.any(np.isnan(inv_sqrt_degree)):
-            print("⚠️  inv_sqrt_degree has bad entries!",
+            print("inv_sqrt_degree has bad entries!",
                   inv_sqrt_degree[np.where(np.isinf(inv_sqrt_degree))],
                   inv_sqrt_degree[np.where(np.isnan(inv_sqrt_degree))])
 
@@ -523,6 +549,60 @@ class MilieuWorm(Milieu):
         self.bias = nn.Parameter(torch.ones(size=(1,),
                                             dtype=torch.float,
                                             requires_grad=True))
+
+    def forward(self, inputs):
+        """
+        Forward pass through the model. See Methods, Equation (2).
+        args:
+            inputs (torch.Tensor) an (m, n) binary torch tensor where m = # of nodesets
+            in batch and n = # of ndoes in the Network
+        returns:
+            out (torch.Tensor) an (m, n) torch tensor. Element (i, j) is the activations
+            for nodeset i and node j. Note: these are activations, not probabilities.
+            Use torch.sigmoid to convert to probabilties.
+        """
+        # adjacency matrix of network, (A in Equation (2))
+        # adj_matrix = torch.tensor(self.adj_matrix, dtype=torch.float, device=inputs.device)
+
+        # n = adj_matrix.size(0)
+        # identity = torch.eye(n, device=inputs.device, dtype=torch.float)
+
+        # drop edges if random.random() < q:
+        q = random.random()
+        if self.edge_dropout and self.training and q < 0.5:
+            # sample mask; same shape as adjacency
+            p = (self.alpha + (1-self.alpha)*self.edge_confidence_matrix)
+            p = p.clamp(0.0, 1.0)
+            mask = torch.bernoulli(p)
+            adj_matrix_masked = (self.adj_matrix_tensor * mask) + self.identity
+
+            # degree vector, (D^{-0.5} in Equation (2))
+            # degree = np.sum(adj_matrix_masked, axis=1, dtype=float)
+            degree = adj_matrix_masked.sum(dim=1)
+            # inv_sqrt_degree = np.power(degree, -0.5)
+            # inv_sqrt_degree = torch.tensor(inv_sqrt_degree, dtype=torch.float)
+            inv_sqrt_degree = degree.pow(-0.5)
+
+            adj_matrix_left = torch.mul(torch.mul(inv_sqrt_degree.view(1, -1),
+                                                  adj_matrix_masked),
+                                        inv_sqrt_degree.view(-1, 1))
+
+            adj_matrix_right = torch.mul(inv_sqrt_degree.view(1, -1),
+                                         adj_matrix_masked)
+        else:
+            adj_matrix_left, adj_matrix_right = self.adj_matrix_left, self.adj_matrix_right
+
+        m, n = inputs.shape
+        out = inputs
+        out = torch.matmul(inputs, adj_matrix_left)
+        out = torch.mul(out, self.milieu_weights)
+        out = torch.matmul(out, adj_matrix_right)
+
+        out = out.view(1, m * n).t()
+        out = self.scale(out) + self.bias
+        out = out.view(m, n)
+
+        return out
 
     def loss(self, outputs, targets, targets_weight_mask):
         """
@@ -560,7 +640,7 @@ class MilieuWorm(Milieu):
         epoch.
         args:
             train_dataset (MilieuDataset) A milieu dataset of training node sets
-            valid_dataset (MilieuDataset) A milieu dataset of validatio node sets
+            valid_dataset (MilieuDataset) A milieu dataset of validation node sets
         returns:
             train_metrics   (list(dict)) train_metrics[i] is a dictionary mapping metric
             names to their values on epoch i
@@ -570,8 +650,8 @@ class MilieuWorm(Milieu):
             set_seed(self.params["seed"])
         logging.info(f'Starting training for {self.params["num_epochs"]} epoch(s)')
 
-        # move to cuda
-        if self.params["cuda"]:
+        # move to mps
+        if self.params["mps"]:
             self.to(self.params["device"])
 
         dl_generator = None
@@ -586,7 +666,8 @@ class MilieuWorm(Milieu):
                                       shuffle=True,
                                       generator=dl_generator,
                                       num_workers=self.params["num_workers"],
-                                      pin_memory=self.params["device"])
+                                      # pin_memory=self.params["device"]
+                                      )
 
         validate = valid_dataset is not None
         if validate:
@@ -597,7 +678,8 @@ class MilieuWorm(Milieu):
                                           shuffle=False,
                                           generator=dl_generator,
                                           num_workers=self.params["num_workers"],
-                                          pin_memory=self.params["device"])
+                                          # pin_memory=self.params["device"]
+                                          )
             best_val_loss = float('inf')
             patience = self.params.get("early_stopping_patience", 10)  # Default patience of 10 epochs
             trigger_times = 0
@@ -656,7 +738,7 @@ class MilieuWorm(Milieu):
         avg_loss = 0
 
         for i, (inputs, targets, targets_weight_mask) in enumerate(dataloader):
-            if self.params["cuda"]:
+            if self.params["mps"]:
                 inputs = inputs.to(self.params["device"])
                 targets = targets.to(self.params["device"])
                 targets_weight_mask = targets_weight_mask.to(self.params["device"])
@@ -706,8 +788,8 @@ class MilieuWorm(Milieu):
         # logging.info("Validation")
         self.eval()
 
-        # move to cuda
-        if self.params["cuda"]:
+        # move to mps
+        if self.params["mps"]:
             self.to(self.params["device"])
 
         metrics = defaultdict(list)
@@ -717,7 +799,7 @@ class MilieuWorm(Milieu):
         with torch.no_grad():
             for i, (inputs, targets, targets_weight_mask) in enumerate(dataloader):
                 # move to GPU if available
-                if self.params["cuda"]:
+                if self.params["mps"]:
                     inputs = inputs.to(self.params["device"])
                     targets = targets.to(self.params["device"])
                     targets_weight_mask = targets_weight_mask.to(self.params["device"])
@@ -737,23 +819,71 @@ class MilieuWorm(Milieu):
 
                 # compute average loss and update the progress bar
                 avg_loss = ((avg_loss * i) + loss) / (i + 1)
-                logging.info(f"loss_val: {round(float(avg_loss), 5)}")
+            logging.info(f"avg_val_loss: {round(float(avg_loss), 5)}")
 
         return metrics, avg_loss
 
-class NodeSetWorm:
-    def __init__(self, id, node_mapping, nodes):
-        self.id = id
-        self.node_mapping = node_mapping
-        self.nodes = nodes
+class MilieuDataset(Dataset):
 
-    def to_node_array(self, network):
-        self.node_ids = [id for name, id in self.node_mapping.items() if name in self.nodes]
-        return network.get_nodes(self.node_ids)
+    def __init__(self, network, node_sets=None, frac_known=0.9):
+        """
+        PyTorch dataset that holds node sets and serves them to the
+        Milieu for training. During training we simulate node set expansion by
+        splitting each node set into an input set and a target set. Each time we
+        access an node set set from this dataset we randomly sample 90% of associations
+        for the input set and use the remaining 10% for the target set. See Methods.
+        args:
+            network (Network)    Network being used by the Milieu model
+            node_sets    (list(NodeSet)) list of milieu.data.associations.NodeSet.
+            frac_known  (float)   fraction of each association set used for input set and
+            target set.
+        """
+        self.n = len(network)
+        self.examples = [{"id": node_set.id,
+                          "nodes": node_set.to_node_array(network)}
+                         for node_set
+                         in node_sets]
+        self.frac_known = frac_known
+
+    def __len__(self):
+        """ Returns the size of the dataset."""
+        return len(self.examples)
+
+    def get_ids(self):
+        """ Get the set of all the node_set ids in the dataset."""
+        return set([node_set["id"] for node_set in self.examples])
+
+    def __getitem__(self, idx):
+        """
+        Get an association split into an input and target set as described in Methods.
+        args:
+            idx (int) The index of the association set in the dataset.
+        returns:
+            inputs (torch.Tensor) an (n,) binary torch tensor indicating the nodes in
+            the input set.
+            targets (torch.Tensor) an (n,) binary torch tensor indicating the nodes in
+            the target set.
+        """
+        nodes = self.examples[idx]["nodes"]
+        np.random.shuffle(nodes)
+        split = int(self.frac_known * len(nodes))
+
+        known_nodes = nodes[:split]
+        hidden_nodes = nodes[split:]
+
+        inputs = torch.zeros(self.n, dtype=torch.float)
+        inputs[known_nodes] = 1
+        targets = torch.zeros(self.n, dtype=torch.float)
+        targets[hidden_nodes] = 1
+
+        # ensure no data leakage
+        assert (torch.dot(inputs, targets) == 0)
+
+        return inputs, targets
 
 class MilieuDatasetWorm(Dataset):
 
-    def __init__(self, network, node_mapping, phenotype_confidence_dict=None,
+    def __init__(self, network, phenotype_confidence_dict=None,
                  node_sets=None, frac_known=0.9):
         """
         PyTorch dataset that holds node sets and serves them to the 
@@ -764,14 +894,13 @@ class MilieuDatasetWorm(Dataset):
 
         Args:
             network (Network): Network being used by the Milieu model
-            node_mapping (dict): Dictionary mapping node IDs to names.
             phenotype_confidence_dict (dict): Dictionary of confidence scores
             for each node's phenotypic association
             node_sets (list(NodeSet)): list of milieu.data.associations.NodeSet.
             frac_known (float): fraction of each association set used for input set and
             target set.
         """
-        self.node_mapping = node_mapping
+        # self.node_mapping = node_mapping
         self.n = len(network)
         self.examples = [{"id": node_set.id, 
                           "nodes": node_set.to_node_array(network)}
@@ -817,19 +946,20 @@ class MilieuDatasetWorm(Dataset):
         num_neg = targets.data.nelement() - num_pos
         pos_imbalance = num_neg / num_pos
 
-        if self.phenotype_confidence_dict is not None:
-            for u in known_nodes:
-                inputs[u] = self.phenotype_confidence_dict.get(self.node_mapping[str(u)], 0.0)
-            for u in hidden_nodes:
-                c = self.phenotype_confidence_dict.get(self.node_mapping[str(u)], 0.0)
-                targets_weight_mask[u] = 1 + (pos_imbalance - 1) * c
-        else:
-            for u in hidden_nodes:
-                targets_weight_mask[u] = pos_imbalance
+        # if self.phenotype_confidence_dict is not None:
+        #     for u in known_nodes:
+        #         inputs[u] = self.phenotype_confidence_dict.get(self.node_mapping[str(u)], 0.0)
+        #     for u in hidden_nodes:
+        #         c = self.phenotype_confidence_dict.get(self.node_mapping[str(u)], 0.0)
+        #         targets_weight_mask[u] = 1 + (pos_imbalance - 1) * c
+        # else:
+        #     for u in hidden_nodes:
+        #         targets_weight_mask[u] = pos_imbalance
+        for u in hidden_nodes:
+            targets_weight_mask[u] = pos_imbalance
 
         # ensure no data leakage
         assert(torch.dot(inputs, targets) == 0)
 
         return inputs, targets, targets_weight_mask
-
 
