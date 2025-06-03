@@ -104,6 +104,41 @@ def load_diseases(
 
     return diseases
 
+def load_biological_processes(associations_path, biological_process_subset=[],
+                              exclude_splits=[], gene_names_path=None):
+    """ Load a set of biological process-protein associations
+    Args:
+        associations_path (string)
+        biological_process_subset (set)
+    Returns:
+        biological_process (dict)
+    """
+    biological_process = {}
+    total = 0
+    with open(associations_path) as associations_file:
+        reader = csv.DictReader(associations_file)
+
+        for row in reader:
+            biological_process_id = row["biological_process_id"]
+            if biological_process_subset and biological_process_id not in biological_process_subset:
+                continue
+
+            split = row.get("splits", None)
+            if split in exclude_splits:
+                continue
+
+            biological_process_name = row["biological_process_name"]
+
+            wb_ids = set(
+                [a.strip() for a in row["associated_gene_wb_ids"].split(",")]
+            )
+
+            total += len(wb_ids)
+            biological_process[biological_process_id] = ProteinSet(
+                biological_process_id, biological_process_name, wb_ids
+            )
+
+    return biological_process
 
 def build_disease_matrix(diseases_dict, network, exclude_splits=[]):
     """
