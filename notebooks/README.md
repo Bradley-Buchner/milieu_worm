@@ -1,6 +1,6 @@
 # *Mutual Interactors* for *C. elegans* aging: discovering novel gene-lifespan associations and quantifying aging-specific importance
 
-**Bradley Buchner**
+*Bradley Buchner*
 
 This subdirectory contains Jupyter notebooks that repurpose the *Mutual Interactors* framework for the discovery of phenotype associations in the *C. elegans* genetic interaction network. Specifically, the notebook `milieu_worm_walkthrough.ipynb` takes you through the process of training a model on the *C. elegans* network, performing node-set expansion of lifespan-associated nodes, and computing an aging importance metric, which quantifies a node's influence as a mutual interactor in node-set expansion of lifespan-associated nodes.
 
@@ -9,3 +9,5 @@ To train a model, the following inputs are required: (1) the organism's full gen
 Also shown in `milieu_worm_walkthrough.ipynb` is the process of calculating gene aging importance. This importance score is computed by integrating the model’s learned global interactor weights—which represent a node's general capacity to carry phenotypic signal across the network—with its specific connectivity to known lifespan-associated nodes. By identifying nodes that act as powerful mutual interactors for the aging phenotype, the framework can uncover genes that may have been overlooked by traditional direct-interaction analysis.
 
 Ultimately, `milieu_worm_walkthrough.ipynb` serves as an example of how to extend the *Mutual Interactors* framework to address more targeted research questions.
+
+See [milieu/README.md](README.md) and/or the [Eyuboglu et al. (2023)](https://pubmed.ncbi.nlm.nih.gov/36540965/) for background on the *Mutual Interactors* framework. 
