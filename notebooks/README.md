@@ -10,4 +10,4 @@ Also shown in `milieu_worm_walkthrough.ipynb` is the process of calculating gene
 
 Ultimately, `milieu_worm_walkthrough.ipynb` serves as an example of how to extend the *Mutual Interactors* framework to address more targeted research questions.
 
-See [milieu/README.md](README.md) and/or the [Eyuboglu et al. (2023)](https://pubmed.ncbi.nlm.nih.gov/36540965/) for background on the *Mutual Interactors* framework. 
+See [milieu/README.md](README.md) and/or [Eyuboglu et al. (2023)](https://pubmed.ncbi.nlm.nih.gov/36540965/) for background on the *Mutual Interactors* framework. 
