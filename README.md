@@ -2,7 +2,7 @@
 
 *Bradley Buchner*
 
-This repository is a detached fork of the [milieu](https://github.com/seyuboglu/milieu) repository that repurposes its *Mutual Interactors* framework for the discovery of phenotype associations in the *C. elegans* genetic interaction network. For a detailed description of the method, see [milieu/README.md](https://github.com/seyuboglu/milieu/blob/master/README.md) or [Eyuboglu et al. (2023)](https://pubmed.ncbi.nlm.nih.gov/36540965/). 
+This repository is a detached fork of the [milieu](https://github.com/seyuboglu/milieu) repository that repurposes its *Mutual Interactors* machine learning framework for the discovery of phenotype associations in the *C. elegans* genetic interaction network. For a detailed description of the method, see [milieu/README.md](https://github.com/seyuboglu/milieu/blob/master/README.md) or [Eyuboglu et al. (2023)](https://pubmed.ncbi.nlm.nih.gov/36540965/). 
 
 Inspired by Eyuboglu et al. (2023), this repository extends the *Mutual Interactors* framework to investigate how an organism's genetic interactions determine its lifespan. The notebook [milieu_worm_walkthrough.ipynb](notebooks/milieu_worm_walkthrough.ipynb) explores this by training a model on the *C. elegans* interaction network, performing lifespan-associated node-set expansion to predict every node's (gene/protein's) association probability, and using the model's learned weights to quantify each node's influence as a mutual interactor in lifespan-associated node-set expansion, which, according to Eyuboglu et al. (2023), is positively correlated with a node's involvement in cell-cell signaling and its druggability. 
 
