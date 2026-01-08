@@ -1,4 +1,4 @@
-# Applying the *Mutual Interactors* method to study the genetics of aging in *C. elegans*
+# Applying the *Mutual Interactors* framework to study the genetics of aging in *C. elegans*
 
 *Bradley Buchner*
 
