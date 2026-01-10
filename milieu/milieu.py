@@ -631,7 +631,7 @@ class MilieuWorm(Milieu):
         bce_loss = nn.BCEWithLogitsLoss(weight=targets_weight_mask)
         return bce_loss(outputs, targets)
 
-    def train_model(self, train_dataset, valid_dataset=None):
+    def train_model_old(self, train_dataset, valid_dataset=None):
         """
         Train the Milieu model on train_dataset. Parameters for training including
         "num_epochs" and "optimizer_class" should be specified in the params dict
@@ -718,6 +718,76 @@ class MilieuWorm(Milieu):
             return train_metrics, valid_metrics, train_losses, valid_losses
         else:
             return train_metrics, train_losses
+
+    def train_model(self, train_dataset, valid_dataset=None):
+        if "seed" in self.params:
+            set_seed(self.params["seed"])
+
+        # move to mps/device
+        if self.params["mps"]:
+            self.to(self.params["device"])
+
+        # --- Dataloader Setup ---
+        dl_generator = torch.Generator().manual_seed(self.params["seed"]) if "seed" in self.params else None
+        train_dataloader = DataLoader(train_dataset, batch_size=self.params["batch_size"],
+                                      shuffle=True, generator=dl_generator,
+                                      num_workers=self.params["num_workers"])
+
+        validate = valid_dataset is not None
+        if validate:
+            valid_dataloader = DataLoader(valid_dataset, batch_size=self.params["batch_size"],
+                                          shuffle=False, generator=dl_generator,
+                                          num_workers=self.params["num_workers"])
+            best_val_loss = float('inf')
+            patience = self.params.get("early_stopping_patience", 10)
+            trigger_times = 0
+
+        train_metrics, train_losses = [], []
+        if validate: valid_metrics, valid_losses = [], []
+
+        # --- Initialize tqdm Progress Bar ---
+        num_epochs = self.params["num_epochs"]
+        pbar = tqdm(range(num_epochs), desc="Training Progress")
+
+        for epoch in pbar:
+            # Train for one epoch
+            epoch_metrics, epoch_loss = self._train_epoch(train_dataloader)
+            train_metrics.append(epoch_metrics)
+            train_losses.append(epoch_loss)
+
+            if self.scheduler:
+                self.scheduler.step()
+
+            # Validation Logic
+            display_stats = {"loss": f"{epoch_loss:.4f}"}
+
+            if validate:
+                epoch_metrics_val, epoch_loss_val = self.score(valid_dataloader)
+                valid_metrics.append(epoch_metrics_val)
+                valid_losses.append(epoch_loss_val)
+
+                display_stats["val_loss"] = f"{epoch_loss_val:.4f}"
+
+                # Early Stopping Check
+                if epoch_loss_val < best_val_loss:
+                    best_val_loss = epoch_loss_val
+                    trigger_times = 0
+                    best_model_state = deepcopy(self.state_dict())
+                else:
+                    trigger_times += 1
+                    if trigger_times >= patience:
+                        pbar.set_postfix_str(f"Early stop at epoch {epoch + 1}")
+                        self.load_state_dict(best_model_state)
+                        break
+            else:
+                best_model_state = deepcopy(self.state_dict())
+
+            # Update the progress bar text with current stats
+            pbar.set_postfix(display_stats)
+
+        if validate:
+            return train_metrics, valid_metrics, train_losses, valid_losses
+        return train_metrics, train_losses
 
     def _train_epoch(self, dataloader, metric_configs=[], verbose=False):
         """ Train the model for one epoch
@@ -819,7 +889,7 @@ class MilieuWorm(Milieu):
 
                 # compute average loss and update the progress bar
                 avg_loss = ((avg_loss * i) + loss) / (i + 1)
-            logging.info(f"avg_val_loss: {round(float(avg_loss), 5)}")
+            # logging.info(f"avg_val_loss: {round(float(avg_loss), 5)}")
 
         return metrics, avg_loss
 
